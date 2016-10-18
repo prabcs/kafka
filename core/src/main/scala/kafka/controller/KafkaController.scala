@@ -541,9 +541,9 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
    *    In any case, the LeaderAndIsr request will have AR = RAR. This will prevent the leader from adding any replica in
    *    RAR - OAR back in the isr.
    * 8. Move all replicas in OAR - RAR to OfflineReplica state. As part of OfflineReplica state change, we shrink the
-   *    isr to remove OAR - RAR in zookeeper and sent a LeaderAndIsr ONLY to the Leader to notify it of the shrunk isr.
+   *    isr to remove OAR - RAR in zookeeper and send a LeaderAndIsr ONLY to the Leader to notify it of the shrunk isr.
    *    After that, we send a StopReplica (delete = false) to the replicas in OAR - RAR.
-   * 9. Move all replicas in OAR - RAR to NonExistentReplica state. This will send a StopReplica (delete = false) to
+   * 9. Move all replicas in OAR - RAR to NonExistentReplica state. This will send a StopReplica (delete = true) to
    *    the replicas in OAR - RAR to physically delete the replicas on disk.
    * 10. Update AR in ZK with RAR.
    * 11. Update the /admin/reassign_partitions path in ZK to remove this partition.
@@ -631,20 +631,13 @@ class KafkaController(val config : KafkaConfig, zkUtils: ZkUtils, val brokerStat
             throw new KafkaException("Partition %s to be reassigned is already assigned to replicas".format(topicAndPartition) +
               " %s. Ignoring request for partition reassignment".format(newReplicas.mkString(",")))
           } else {
-            if(aliveNewReplicas == newReplicas) {
-              info("Handling reassignment of partition %s to new replicas %s".format(topicAndPartition, newReplicas.mkString(",")))
-              // first register ISR change listener
-              watchIsrChangesForReassignedPartition(topic, partition, reassignedPartitionContext)
-              controllerContext.partitionsBeingReassigned.put(topicAndPartition, reassignedPartitionContext)
-              // mark topic ineligible for deletion for the partitions being reassigned
-              deleteTopicManager.markTopicIneligibleForDeletion(Set(topic))
-              onPartitionReassignment(topicAndPartition, reassignedPartitionContext)
-            } else {
-              // some replica in RAR is not alive. Fail partition reassignment
-              throw new KafkaException("Only %s replicas out of the new set of replicas".format(aliveNewReplicas.mkString(",")) +
-                " %s for partition %s to be reassigned are alive. ".format(newReplicas.mkString(","), topicAndPartition) +
-                "Failing partition reassignment")
-            }
+            info("Handling reassignment of partition %s to new replicas %s".format(topicAndPartition, newReplicas.mkString(",")))
+            // first register ISR change listener
+            watchIsrChangesForReassignedPartition(topic, partition, reassignedPartitionContext)
+            controllerContext.partitionsBeingReassigned.put(topicAndPartition, reassignedPartitionContext)
+            // mark topic ineligible for deletion for the partitions being reassigned
+            deleteTopicManager.markTopicIneligibleForDeletion(Set(topic))
+            onPartitionReassignment(topicAndPartition, reassignedPartitionContext)
           }
         case None => throw new KafkaException("Attempt to reassign partition %s that doesn't exist"
           .format(topicAndPartition))
@@ -1259,7 +1252,7 @@ class PartitionsReassignedListener(controller: KafkaController) extends IZkDataL
   def handleDataChange(dataPath: String, data: Object) {
     debug("Partitions reassigned listener fired for path %s. Record partitions to be reassigned %s"
       .format(dataPath, data))
-    val partitionsReassignmentData = zkUtils.parsePartitionReassignmentData(data.toString)
+    val partitionsReassignmentData = ZkUtils.parsePartitionReassignmentData(data.toString)
     val partitionsToBeReassigned = inLock(controllerContext.controllerLock) {
       partitionsReassignmentData.filterNot(p => controllerContext.partitionsBeingReassigned.contains(p._1))
     }

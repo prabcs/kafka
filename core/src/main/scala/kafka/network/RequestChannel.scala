@@ -25,6 +25,7 @@ import java.util.concurrent._
 import com.yammer.metrics.core.Gauge
 import kafka.api._
 import kafka.metrics.KafkaMetricsGroup
+import kafka.server.QuotaId
 import kafka.utils.{Logging, SystemTime}
 import org.apache.kafka.common.TopicPartition
 import org.apache.kafka.common.errors.InvalidRequestException
@@ -37,6 +38,7 @@ import org.apache.log4j.Logger
 
 object RequestChannel extends Logging {
   val AllDone = new Request(processor = 1, connectionId = "2", new Session(KafkaPrincipal.ANONYMOUS, InetAddress.getLocalHost()), buffer = getShutdownReceive(), startTimeMs = 0, securityProtocol = SecurityProtocol.PLAINTEXT)
+  private val requestLogger = Logger.getLogger("kafka.request.logger")
 
   def getShutdownReceive() = {
     val emptyRequestHeader = new RequestHeader(ApiKeys.PRODUCE.id, "", 0)
@@ -44,7 +46,9 @@ object RequestChannel extends Logging {
     RequestSend.serialize(emptyRequestHeader, emptyProduceRequest.toStruct)
   }
 
-  case class Session(principal: KafkaPrincipal, clientAddress: InetAddress)
+  case class Session(principal: KafkaPrincipal, clientAddress: InetAddress) {
+    val sanitizedUser = QuotaId.sanitize(principal.getName)
+  }
 
   case class Request(processor: Int, connectionId: String, session: Session, private var buffer: ByteBuffer, startTimeMs: Long, securityProtocol: SecurityProtocol) {
     // These need to be volatile because the readers are in the network thread and the writers are in the request
@@ -99,7 +103,6 @@ object RequestChannel extends Logging {
         null
 
     buffer = null
-    private val requestLogger = Logger.getLogger("kafka.request.logger")
 
     def requestDesc(details: Boolean): String = {
       if (requestObj != null)
